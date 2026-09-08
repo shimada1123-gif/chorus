@@ -55,10 +55,19 @@ RUN npm ci
 
 COPY . .
 
+ARG INSTALL_PLAYWRIGHT_DEPS=true
+
 RUN npm run build \
     && npm --workspace @chorus/dashboard run build \
     && if [ "$INSTALL_AI_CLIS" = "true" ]; then \
       npm install -g @openai/codex@latest @anthropic-ai/claude-code@latest @google/gemini-cli@latest; \
+    fi \
+    # System libraries Playwright's chromium needs (libglib, libnss, …). A project whose verify
+    # command runs a browser suite fails on `libglib-2.0.so.0` without them, and the agent has no
+    # root to install them itself. The browser BINARY is still per-project (`npx playwright
+    # install`), which needs no root.
+    && if [ "$INSTALL_PLAYWRIGHT_DEPS" = "true" ]; then \
+      npx --yes playwright@1.63.0 install-deps chromium && rm -rf /var/lib/apt/lists/*; \
     fi \
     && useradd --create-home --home-dir /home/chorus --shell /bin/bash chorus \
     && mkdir -p /var/lib/chorus /opt/npm-global \

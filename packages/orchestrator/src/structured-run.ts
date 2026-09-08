@@ -72,13 +72,19 @@ export async function runStructured<T>(
   const rawLogPath = join(opts.artifactsDir, `${label}.log`);
   writeFileSync(schemaPath, JSON.stringify(jsonSchema, null, 2), "utf8");
 
+  // Inside a container the codex sandbox (bubblewrap) needs a user namespace it usually cannot
+  // create — `unshare: Operation not permitted` — so every shell command the reviewer/evaluator
+  // tries to run fails and the verdict degrades to "could not read the diff". The container IS
+  // the sandbox in that deployment, which is the exact case codex documents its bypass flag for
+  // ("environments that are externally sandboxed"), and what the autonomous orchestrator already
+  // does. Opt-in by env so bare-metal installs keep the in-process sandbox.
+  const unsandboxed = process.env.CHORUS_CODEX_UNSANDBOXED === "1";
   const proc = new StreamingProcess(
     opts.bin ?? "codex",
     [
       "exec",
       "--json",
-      "-s",
-      opts.sandbox,
+      ...(unsandboxed ? ["--dangerously-bypass-approvals-and-sandbox"] : ["-s", opts.sandbox]),
       "--skip-git-repo-check",
       "-C",
       opts.cwd,
