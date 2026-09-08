@@ -70,12 +70,14 @@ export class SpecIngestor {
     writeFileSync(schemaPath, JSON.stringify(TICKETS_JSON_SCHEMA, null, 2), "utf8");
 
     const prompt = buildIngestPrompt(specText);
+    // Same switch as packages/orchestrator/src/structured-run.ts: in a container, bubblewrap has
+    // no user namespace to create, so any shell command codex runs while reading the spec fails.
+    const unsandboxed = process.env.CHORUS_CODEX_UNSANDBOXED === "1";
     const r = await run(
       opts.bin ?? "codex",
       [
         "exec",
-        "-s",
-        "read-only",
+        ...(unsandboxed ? ["--dangerously-bypass-approvals-and-sandbox"] : ["-s", "read-only"]),
         "--skip-git-repo-check",
         "-C",
         project.localPath,
