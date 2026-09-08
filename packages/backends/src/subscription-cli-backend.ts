@@ -54,11 +54,19 @@ export class ClaudeBackend implements AIBackend {
       quotaPolicy: this.opts.quotaPolicy,
       capabilities: this.capabilities,
       spec,
+      // stream-json (+ --verbose, which print mode requires for it) instead of json: the run then
+      // emits one NDJSON event per assistant turn and tool call as it happens, and the final
+      // `result` event still carries `structured_output` with the schema payload — measured on
+      // claude 2.1.263: 8 lines for a trivial prompt, last line {"type":"result", …,
+      // "structured_output":{…}}. With plain `json` the process is silent until it exits, so a
+      // 40-minute run is indistinguishable from a hung one from the outside, and the live feed
+      // shows nothing of what the agent read or wrote. Set CHORUS_CLAUDE_STREAM=0 to go back.
       args: [
         "-p",
         spec.prompt,
         "--output-format",
-        "json",
+        process.env.CHORUS_CLAUDE_STREAM === "0" ? "json" : "stream-json",
+        ...(process.env.CHORUS_CLAUDE_STREAM === "0" ? [] : ["--verbose"]),
         "--json-schema",
         JSON.stringify(AGENT_RESULT_SCHEMA),
         "--permission-mode",
@@ -203,6 +211,28 @@ function mapCliLine(raw: string): AgentEvent[] {
   }
 
   const events: AgentEvent[] = [];
+  // Claude's stream-json turns: surface what the agent says and which tools it calls, so the
+  // feed moves while the run is alive. The final `result` event is left to findPayload below.
+  const turn = parsed.value as { type?: string; message?: { content?: unknown } };
+  if (turn.type === "assistant" && Array.isArray(turn.message?.content)) {
+    for (const block of turn.message.content as Array<Record<string, unknown>>) {
+      if (block.type === "text" && typeof block.text === "string" && block.text.trim()) {
+        events.push({ kind: "message", text: block.text.trim(), at });
+      } else if (block.type === "tool_use" && typeof block.name === "string") {
+        const input = block.input as Record<string, unknown> | undefined;
+        const target =
+          typeof input?.file_path === "string"
+            ? input.file_path
+            : typeof input?.command === "string"
+              ? input.command
+              : typeof input?.pattern === "string"
+                ? input.pattern
+                : "";
+        events.push({ kind: "log", line: `→ ${block.name} ${target}`.trim().slice(0, 300), at });
+      }
+    }
+    return events;
+  }
   const usage = extractUsage(parsed.value);
   if (usage) events.push({ kind: "usage", usage, at });
   const err = errorText(parsed.value);
